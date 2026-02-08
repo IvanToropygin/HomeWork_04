@@ -4,8 +4,11 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.Typeface
 import android.os.Parcel
 import android.os.Parcelable
+import android.text.TextPaint
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
@@ -14,6 +17,7 @@ import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
+import androidx.core.graphics.withSave
 
 class PieChartView @JvmOverloads constructor(
     context: Context,
@@ -22,7 +26,7 @@ class PieChartView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     interface OnSectorClickListener {
-        fun onSectorClick(category: String)
+        fun onSectorClick(categoryData: CategoryData)
     }
 
     private var onSectorClickListener: OnSectorClickListener? = null
@@ -32,26 +36,20 @@ class PieChartView @JvmOverloads constructor(
     }
 
     private var categoriesData = mutableListOf<CategoryData>()
-    private val colors = arrayOf(
-        Color.RED, Color.BLUE, Color.GREEN, Color.YELLOW, Color.CYAN,
-        Color.MAGENTA, Color.GRAY, Color.parseColor("#FFA500"), // Orange
-        Color.parseColor("#800080"), // Purple
-        Color.parseColor("#008080"), // Teal
-        Color.parseColor("#FF1493"), // Deep Pink
-        Color.parseColor("#00CED1") // Dark Turquoise
-    )
-
     private var totalAmount = 0.0
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
     private val selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var centerText = ""
+    private val legendPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
 
     private var centerX = 0f
     private var centerY = 0f
     private var radius = 0f
     private var selectedSector = -1
+    private var textSize = 0f
+    private var legendTextSize: Int = 0
 
     init {
         setupPaints()
@@ -61,13 +59,17 @@ class PieChartView @JvmOverloads constructor(
         paint.style = Paint.Style.FILL
         paint.strokeWidth = 2f
 
-        textPaint.color = Color.WHITE
-        textPaint.textSize = 36f
+        textPaint.color = Color.BLACK
         textPaint.textAlign = Paint.Align.CENTER
+        textPaint.typeface = Typeface.DEFAULT_BOLD
 
-        selectedPaint.style = Paint.Style.FILL
-        selectedPaint.color = Color.parseColor("#CCCCCC")
-        selectedPaint.strokeWidth = 3f
+        legendPaint.color = Color.DKGRAY
+        legendPaint.textAlign = Paint.Align.LEFT
+        legendPaint.textSize = 36f
+
+        selectedPaint.style = Paint.Style.STROKE
+        selectedPaint.color = Color.BLACK
+        selectedPaint.strokeWidth = 4f
 
         centerPaint.color = Color.WHITE
         centerPaint.style = Paint.Style.FILL
@@ -77,20 +79,12 @@ class PieChartView @JvmOverloads constructor(
         categoriesData.clear()
         categoriesData.addAll(categories)
         totalAmount = categoriesData.sumOf { it.amount }
-        updateCenterText()
         invalidate()
         requestLayout()
     }
 
-    private fun updateCenterText() {
-        if (categoriesData.isNotEmpty()) {
-            val topCategory = categoriesData.maxByOrNull { it.amount }
-            centerText = topCategory?.category ?: ""
-        }
-    }
-
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val minSize = 400
+        val minSize = dpToPx(400)
 
         val widthMode = MeasureSpec.getMode(widthMeasureSpec)
         val widthSize = MeasureSpec.getSize(widthMeasureSpec)
@@ -119,7 +113,13 @@ class PieChartView @JvmOverloads constructor(
 
         centerX = w / 2f
         centerY = h / 2f
-        radius = minOf(w, h) * 0.4f
+        radius = minOf(w, h) * 0.3f
+
+        textSize = radius * 0.1f
+        legendTextSize = dpToPx(12)
+
+        textPaint.textSize = textSize
+        legendPaint.textSize = legendTextSize.toFloat()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -130,31 +130,25 @@ class PieChartView @JvmOverloads constructor(
             return
         }
 
-        var startAngle = 0f
+        var startAngle = -90f
 
         for ((index, category) in categoriesData.withIndex()) {
             val sweepAngle = (category.amount / totalAmount * 360).toFloat()
 
             paint.color = category.color
 
-            if (index == selectedSector) {
-                val offsetRadius = radius * 1.1f
-                val offsetX =
-                    (cos(Math.toRadians((startAngle + sweepAngle / 2).toDouble())) * offsetRadius * 0.1).toFloat()
-                val offsetY =
-                    (sin(Math.toRadians((startAngle + sweepAngle / 2).toDouble())) * offsetRadius * 0.1).toFloat()
+            canvas.drawArc(
+                centerX - radius,
+                centerY - radius,
+                centerX + radius,
+                centerY + radius,
+                startAngle,
+                sweepAngle,
+                true,
+                paint
+            )
 
-                canvas.drawArc(
-                    centerX - offsetRadius + offsetX,
-                    centerY - offsetRadius + offsetY,
-                    centerX + offsetRadius + offsetX,
-                    centerY + offsetRadius + offsetY,
-                    startAngle,
-                    sweepAngle,
-                    true,
-                    paint
-                )
-            } else {
+            if (index == selectedSector) {
                 canvas.drawArc(
                     centerX - radius,
                     centerY - radius,
@@ -163,36 +157,46 @@ class PieChartView @JvmOverloads constructor(
                     startAngle,
                     sweepAngle,
                     true,
-                    paint
+                    selectedPaint
                 )
             }
 
-            if (sweepAngle > 15) {
+            if (sweepAngle > 10) {
                 val angle = startAngle + sweepAngle / 2
-                val textRadius = radius * 0.7f
+                val textRadius = radius * 0.6f
                 val x = centerX + cos(Math.toRadians(angle.toDouble())).toFloat() * textRadius
                 val y = centerY + sin(Math.toRadians(angle.toDouble())).toFloat() * textRadius
 
-                canvas.save()
-                canvas.rotate(angle, x, y)
-                canvas.drawText(
-                    category.category,
-                    x,
-                    y,
-                    textPaint
-                )
-                canvas.restore()
+                val displayText = if (category.category.length > 10) {
+                    "${category.category.substring(0, 8)}..."
+                } else {
+                    category.category
+                }
+
+                canvas.withSave {
+                    if (angle > 90 && angle < 270) {
+                        rotate(angle + 180, x, y)
+                        drawText(displayText, x, y, textPaint)
+                    } else {
+                        rotate(angle, x, y)
+                        drawText(displayText, x, y, textPaint)
+                    }
+                }
             }
 
             startAngle += sweepAngle
         }
 
-        canvas.drawCircle(centerX, centerY, radius * 0.3f, centerPaint)
+        canvas.drawCircle(centerX, centerY, radius * 0.2f, centerPaint)
+
+        val totalText = "Всего:\n${String.format("%.0f", totalAmount)} руб."
+        val totalBounds = Rect()
+        textPaint.getTextBounds(totalText, 0, totalText.length, totalBounds)
 
         canvas.drawText(
-            centerText,
+            totalText,
             centerX,
-            centerY + textPaint.textSize / 3,
+            centerY - textPaint.descent(),
             textPaint.apply { color = Color.BLACK }
         )
     }
@@ -219,26 +223,22 @@ class PieChartView @JvmOverloads constructor(
                 val distance = sqrt((x - centerX).pow(2) + (y - centerY).pow(2))
 
                 if (distance <= radius) {
-                    var angle = (Math.toDegrees(
-                        atan2(
-                            (y - centerY).toDouble(),
-                            (x - centerX).toDouble()
-                        )
-                    ) + 360) % 360
-
+                    var angle =
+                        Math.toDegrees(atan2((y - centerY).toDouble(), (x - centerX).toDouble()))
+                    angle = (angle + 360) % 360
                     angle = (angle + 90) % 360
 
-                    var startAngle = 0f
+                    var currentAngle = 0f
                     for ((index, category) in categoriesData.withIndex()) {
                         val sweepAngle = (category.amount / totalAmount * 360).toFloat()
 
-                        if (angle >= startAngle && angle < startAngle + sweepAngle) {
+                        if (angle >= currentAngle && angle < currentAngle + sweepAngle) {
                             selectedSector = index
-                            onSectorClickListener?.onSectorClick(category.category)
+                            onSectorClickListener?.onSectorClick(category)
                             invalidate()
                             return true
                         }
-                        startAngle += sweepAngle
+                        currentAngle += sweepAngle
                     }
                 }
                 selectedSector = -1
@@ -248,11 +248,14 @@ class PieChartView @JvmOverloads constructor(
         return super.onTouchEvent(event)
     }
 
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density).toInt()
+    }
+
     override fun onSaveInstanceState(): Parcelable {
         val superState = super.onSaveInstanceState()
         return SavedState(superState).apply {
             this.selectedSector = this@PieChartView.selectedSector
-            this.centerText = this@PieChartView.centerText
         }
     }
 
@@ -261,7 +264,6 @@ class PieChartView @JvmOverloads constructor(
         if (savedState != null) {
             super.onRestoreInstanceState(savedState.superState)
             selectedSector = savedState.selectedSector
-            centerText = savedState.centerText
         } else {
             super.onRestoreInstanceState(state)
         }
@@ -269,19 +271,16 @@ class PieChartView @JvmOverloads constructor(
 
     private class SavedState : BaseSavedState {
         var selectedSector: Int = -1
-        var centerText: String = ""
 
         constructor(superState: Parcelable?) : super(superState)
 
         constructor(parcel: Parcel) : super(parcel) {
             selectedSector = parcel.readInt()
-            centerText = parcel.readString() ?: ""
         }
 
         override fun writeToParcel(out: Parcel, flags: Int) {
             super.writeToParcel(out, flags)
             out.writeInt(selectedSector)
-            out.writeString(centerText)
         }
 
         companion object {
